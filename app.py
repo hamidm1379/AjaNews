@@ -5,7 +5,7 @@ import json
 from datetime import datetime
 from telethon import TelegramClient, events
 from telethon.tl.types import MessageMediaPhoto, MessageMediaDocument, MessageMediaWebPage
-from telethon.errors import ChatWriteForbiddenError, ChannelPrivateError, UserBannedInChannelError
+from telethon.errors import ChatWriteForbiddenError, ChannelPrivateError, UserBannedInChannelError, AuthKeyError
 from dotenv import load_dotenv
 
 # بارگذاری متغیرهای محیطی
@@ -384,14 +384,18 @@ async def main():
                 print("✅ اتصال به تلگرام برقرار شد")
             else:
                 raise
-        except Exception as auth_error:
-            error_msg = str(auth_error).lower()
-            # بررسی مجدد برای خطاهای احراز هویت در catch عمومی
-            if any(keyword in error_msg for keyword in [
-                "phone_code_hash", "server closed", "invalid code",
-                "connection", "0 bytes read"
-            ]):
-                print("⚠️ خطا در احراز هویت: session نامعتبر یا کد تأیید نامعتبر است")
+        except AuthKeyError as auth_key_error:
+            error_msg = str(auth_key_error).lower()
+            if "update_app_to_login" in error_msg or "406" in error_msg:
+                print("❌ خطا: نسخه Telethon شما قدیمی است و نیاز به به‌روزرسانی دارد")
+                print("💡 راهنمایی:")
+                print("   - لطفاً Telethon را به‌روزرسانی کنید:")
+                print("     pip install --upgrade telethon")
+                print("   - یا از requirements.txt استفاده کنید:")
+                print("     pip install -r requirements.txt --upgrade")
+                raise
+            else:
+                print(f"❌ خطا در احراز هویت: {str(auth_key_error)}")
                 print("💡 در حال پاک کردن session و شروع مجدد احراز هویت...")
                 
                 # قطع اتصال اگر متصل است
@@ -410,6 +414,41 @@ async def main():
                 print("📱 لطفاً شماره تلفن و کد تأیید جدید را وارد کنید")
                 await client.start()
                 print("✅ اتصال به تلگرام برقرار شد")
+        except Exception as auth_error:
+            error_msg = str(auth_error).lower()
+            # بررسی مجدد برای خطاهای احراز هویت در catch عمومی
+            if any(keyword in error_msg for keyword in [
+                "phone_code_hash", "server closed", "invalid code",
+                "connection", "0 bytes read", "update_app_to_login"
+            ]):
+                if "update_app_to_login" in error_msg or "406" in error_msg:
+                    print("❌ خطا: نسخه Telethon شما قدیمی است و نیاز به به‌روزرسانی دارد")
+                    print("💡 راهنمایی:")
+                    print("   - لطفاً Telethon را به‌روزرسانی کنید:")
+                    print("     pip install --upgrade telethon")
+                    print("   - یا از requirements.txt استفاده کنید:")
+                    print("     pip install -r requirements.txt --upgrade")
+                    raise
+                else:
+                    print("⚠️ خطا در احراز هویت: session نامعتبر یا کد تأیید نامعتبر است")
+                    print("💡 در حال پاک کردن session و شروع مجدد احراز هویت...")
+                    
+                    # قطع اتصال اگر متصل است
+                    try:
+                        await client.disconnect()
+                    except:
+                        pass
+                    
+                    # پاک کردن session فایل‌ها
+                    if clear_session_files(SESSION_NAME):
+                        print("✅ فایل‌های session پاک شدند")
+                    
+                    # ایجاد کلاینت جدید و تلاش مجدد
+                    client = TelegramClient(SESSION_NAME, API_ID, API_HASH)
+                    print("🔄 در حال تلاش مجدد برای احراز هویت...")
+                    print("📱 لطفاً شماره تلفن و کد تأیید جدید را وارد کنید")
+                    await client.start()
+                    print("✅ اتصال به تلگرام برقرار شد")
             else:
                 print(f"❌ خطا در احراز هویت: {str(auth_error)}")
                 print("💡 راهنمایی:")
