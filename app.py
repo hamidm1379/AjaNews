@@ -2,6 +2,7 @@ import os
 import re
 import asyncio
 import json
+import sys
 from datetime import datetime
 from telethon import TelegramClient, events
 from telethon.tl.types import MessageMediaPhoto, MessageMediaDocument, MessageMediaWebPage
@@ -390,10 +391,11 @@ async def main():
                 print("❌ خطا: نسخه Telethon شما قدیمی است و نیاز به به‌روزرسانی دارد")
                 print("💡 راهنمایی:")
                 print("   - لطفاً Telethon را به‌روزرسانی کنید:")
-                print("     pip install --upgrade telethon")
+                print("     pip3 install --upgrade telethon")
                 print("   - یا از requirements.txt استفاده کنید:")
-                print("     pip install -r requirements.txt --upgrade")
-                raise
+                print("     pip3 install -r requirements.txt --upgrade")
+                print("   - پس از به‌روزرسانی، دوباره برنامه را اجرا کنید")
+                sys.exit(1)
             else:
                 print(f"❌ خطا در احراز هویت: {str(auth_key_error)}")
                 print("💡 در حال پاک کردن session و شروع مجدد احراز هویت...")
@@ -425,10 +427,11 @@ async def main():
                     print("❌ خطا: نسخه Telethon شما قدیمی است و نیاز به به‌روزرسانی دارد")
                     print("💡 راهنمایی:")
                     print("   - لطفاً Telethon را به‌روزرسانی کنید:")
-                    print("     pip install --upgrade telethon")
+                    print("     pip3 install --upgrade telethon")
                     print("   - یا از requirements.txt استفاده کنید:")
-                    print("     pip install -r requirements.txt --upgrade")
-                    raise
+                    print("     pip3 install -r requirements.txt --upgrade")
+                    print("   - پس از به‌روزرسانی، دوباره برنامه را اجرا کنید")
+                    sys.exit(1)
                 else:
                     print("⚠️ خطا در احراز هویت: session نامعتبر یا کد تأیید نامعتبر است")
                     print("💡 در حال پاک کردن session و شروع مجدد احراز هویت...")
