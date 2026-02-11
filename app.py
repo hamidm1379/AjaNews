@@ -623,7 +623,7 @@ async def main():
         try:
             # اجرای مداوم - periodic_task در background اجرا می‌شود
             await client.run_until_disconnected()
-        except KeyboardInterrupt:
+        except (KeyboardInterrupt, asyncio.CancelledError):
             print("\n⏹️ دریافت سیگنال توقف (Ctrl+C)...")
         finally:
             # لغو task بررسی دوره‌ای
@@ -636,7 +636,7 @@ async def main():
                     pass
             print("✅ Task بررسی دوره‌ای متوقف شد")
         
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, asyncio.CancelledError):
         print("\n⏹️ ربات متوقف شد")
     except Exception as e:
         print(f"❌ خطای غیرمنتظره: {str(e)}")
@@ -651,8 +651,8 @@ async def main():
             print("✅ اتصال با موفقیت قطع شد")
         except asyncio.TimeoutError:
             print("⚠️ قطع اتصال با تاخیر انجام شد (timeout)")
-        except (KeyboardInterrupt, SystemExit):
-            # اگر KeyboardInterrupt یا SystemExit در حین disconnect رخ دهد، 
+        except (KeyboardInterrupt, SystemExit, asyncio.CancelledError):
+            # اگر KeyboardInterrupt، SystemExit یا CancelledError در حین disconnect رخ دهد، 
             # آن را نادیده می‌گیریم چون در حال خاموش شدن هستیم
             print("⚠️ قطع اتصال در حین توقف برنامه انجام شد")
         except Exception as e:
