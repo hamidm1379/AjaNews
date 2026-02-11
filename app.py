@@ -45,6 +45,46 @@ def save_last_messages(messages):
     with open(LAST_MESSAGES_FILE, 'w', encoding='utf-8') as f:
         json.dump(messages, f, ensure_ascii=False, indent=2)
 
+def get_channel_key(entity, fallback_id=None):
+    """تابع مشترک برای ساخت channel_key از entity"""
+    entity_username = getattr(entity, 'username', None)
+    if entity_username:
+        # همیشه با @ ذخیره می‌کنیم برای consistency
+        return f"@{entity_username.lstrip('@')}"
+    elif hasattr(entity, 'id'):
+        return str(entity.id)
+    elif fallback_id:
+        return str(fallback_id)
+    else:
+        return None
+
+def get_all_channel_keys(entity, channel_username=None, chat_id=None):
+    """برگرداندن همه کلیدهای ممکن برای یک کانال"""
+    keys = set()  # زززززاستفاده از set برای جلوگیری از تکراری
+    entity_username = getattr(entity, 'username', None)
+    
+    # اضافه کردن username با @
+    if entity_username:
+        clean_username = entity_username.lstrip('@')
+        keys.add(f"@{clean_username}")
+        keys.add(clean_username)  # بدون @ برای backward compatibility
+    
+    # اضافه کردن channel_username از SOURCE_CHANNELS (اگر متفاوت است)
+    if channel_username:
+        clean_channel_username = channel_username.lstrip('@')
+        keys.add(clean_channel_username)
+        keys.add(f"@{clean_channel_username}")
+    
+    # اضافه کردن entity.id
+    if hasattr(entity, 'id'):
+        keys.add(str(entity.id))
+    
+    # اضافه کردن chat_id (اگر متفاوت است)
+    if chat_id:
+        keys.add(str(chat_id))
+    
+    return list(keys)
+
 def replace_username_in_text(text, old_username, new_username):
     """جایگزینی @username در متن"""
     if not text or not old_username or not new_username:
@@ -288,20 +328,20 @@ async def check_new_messages(client):
             # دریافت اطلاعات کانال
             entity = await client.get_entity(channel_username)
             
-            # استخراج username کانال از entity برای consistency (قبل از بررسی پیام‌ها)
-            entity_username = getattr(entity, 'username', None)
-            # استفاده از entity.id برای consistency با event handler
-            channel_key = entity_username or str(entity.id)
+            # استفاده از تابع مشترک برای ساخت channel_key
+            channel_key = get_channel_key(entity, channel_username)
+            if not channel_key:
+                print(f"⚠️ نتوانست channel_key را برای {channel_username} بسازد")
+                continue
             
             # دریافت آخرین پیام‌های کانال
             messages = await client.get_messages(entity, limit=10)
             
-            # بررسی پیام‌های جدید - بررسی با هر دو کلید ممکن برای backward compatibility
-            last_seen_id = max(
-                last_messages.get(channel_key, 0),
-                last_messages.get(channel_username, 0),
-                last_messages.get(str(entity.id), 0)
-            )
+            # دریافت همه کلیدهای ممکن برای این کانال
+            all_keys = get_all_channel_keys(entity, channel_username)
+            
+            # بررسی پیام‌های جدید - بررسی با همه کلیدهای ممکن
+            last_seen_id = max([last_messages.get(key, 0) for key in all_keys], default=0)
             
             new_messages = [msg for msg in messages if msg.id > last_seen_id and not msg.out]
             
@@ -319,11 +359,7 @@ async def check_new_messages(client):
                         # بررسی مجدد برای جلوگیری از پردازش تکراری (در صورت پردازش همزمان توسط event handler)
                         current_last_messages = load_last_messages()
                         # بررسی با همه کلیدهای ممکن برای اطمینان کامل
-                        current_last_seen_id = max(
-                            current_last_messages.get(channel_key, 0),
-                            current_last_messages.get(channel_username, 0),
-                            current_last_messages.get(str(entity.id), 0)
-                        )
+                        current_last_seen_id = max([current_last_messages.get(key, 0) for key in all_keys], default=0)
                         
                         # اگر پیام قبلاً پردازش شده، از پردازش مجدد جلوگیری می‌کنیم
                         if message.id <= current_last_seen_id:
@@ -340,12 +376,9 @@ async def check_new_messages(client):
                         processing_messages.add(message_key)
                         
                         # به‌روزرسانی فوری قبل از ارسال برای جلوگیری از race condition
-                        current_last_messages[channel_key] = message.id
-                        # همچنین با همه کلیدهای ممکن ذخیره می‌کنیم برای اطمینان
-                        if str(entity.id) != channel_key:
-                            current_last_messages[str(entity.id)] = message.id
-                        if channel_username != channel_key and channel_username:
-                            current_last_messages[channel_username] = message.id
+                        # ذخیره با همه کلیدهای ممکن برای اطمینان
+                        for key in all_keys:
+                            current_last_messages[key] = message.id
                         save_last_messages(current_last_messages)
                     
                     # استخراج username کانال از entity
@@ -499,21 +532,21 @@ async def main():
             
             # استخراج username کانال
             entity = await event.get_chat()
-            entity_username = getattr(entity, 'username', None)
-            # استفاده از entity.id برای consistency با periodic check
-            channel_key = entity_username or str(event.chat_id)
+            # استفاده از تابع مشترک برای ساخت channel_key
+            channel_key = get_channel_key(entity, event.chat_id)
+            if not channel_key:
+                print(f"⚠️ نتوانست channel_key را برای chat_id {event.chat_id} بسازد")
+                return
+            
+            # دریافت همه کلیدهای ممکن برای این کانال
+            all_keys = get_all_channel_keys(entity, chat_id=event.chat_id)
             
             # استفاده از lock برای جلوگیری از پردازش همزمان
             async with message_processing_lock:
                 # بررسی اینکه آیا این پیام قبلاً پردازش شده است
                 # بررسی با همه کلیدهای ممکن برای اطمینان کامل
                 last_messages = load_last_messages()
-                # بررسی با همه کلیدهای ممکن
-                check_keys = [channel_key, str(event.chat_id)]
-                if hasattr(entity, 'id'):
-                    check_keys.append(str(entity.id))
-                
-                last_seen_id = max([last_messages.get(key, 0) for key in check_keys], default=0)
+                last_seen_id = max([last_messages.get(key, 0) for key in all_keys], default=0)
                 
                 # بررسی اینکه آیا این پیام در حال پردازش است
                 message_key = f"{channel_key}:{message.id}"
@@ -530,11 +563,9 @@ async def main():
                 processing_messages.add(message_key)
                 
                 # به‌روزرسانی فوری قبل از ارسال برای جلوگیری از race condition
-                last_messages[channel_key] = message.id
-                # همچنین با همه کلیدهای ممکن ذخیره می‌کنیم برای اطمینان
-                for key in check_keys:
-                    if key != channel_key:
-                        last_messages[key] = message.id
+                # ذخیره با همه کلیدهای ممکن برای اطمینان
+                for key in all_keys:
+                    last_messages[key] = message.id
                 save_last_messages(last_messages)
             
             print(f"📨 پیام جدید دریافت شد از {event.chat_id}")
