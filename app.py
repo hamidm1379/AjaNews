@@ -11,6 +11,9 @@ from dotenv import load_dotenv
 # Lock برای جلوگیری از پردازش همزمان پیام‌ها
 message_processing_lock = asyncio.Lock()
 
+# Set برای ذخیره پیام‌هایی که در حال پردازش هستند (channel_key: message_id)
+processing_messages = set()
+
 # بارگذاری متغیرهای محیطی
 load_dotenv()
 
@@ -287,15 +290,17 @@ async def check_new_messages(client):
             
             # استخراج username کانال از entity برای consistency (قبل از بررسی پیام‌ها)
             entity_username = getattr(entity, 'username', None)
-            channel_key = entity_username or channel_username or str(entity.id)
+            # استفاده از entity.id برای consistency با event handler
+            channel_key = entity_username or str(entity.id)
             
             # دریافت آخرین پیام‌های کانال
             messages = await client.get_messages(entity, limit=10)
             
-            # بررسی پیام‌های جدید - بررسی با هر دو کلید ممکن
+            # بررسی پیام‌های جدید - بررسی با هر دو کلید ممکن برای backward compatibility
             last_seen_id = max(
                 last_messages.get(channel_key, 0),
-                last_messages.get(channel_username, 0)
+                last_messages.get(channel_username, 0),
+                last_messages.get(str(entity.id), 0)
             )
             
             new_messages = [msg for msg in messages if msg.id > last_seen_id and not msg.out]
@@ -313,10 +318,11 @@ async def check_new_messages(client):
                     async with message_processing_lock:
                         # بررسی مجدد برای جلوگیری از پردازش تکراری (در صورت پردازش همزمان توسط event handler)
                         current_last_messages = load_last_messages()
-                        # بررسی با هر دو کلید ممکن (username و channel_username)
+                        # بررسی با همه کلیدهای ممکن برای اطمینان کامل
                         current_last_seen_id = max(
                             current_last_messages.get(channel_key, 0),
-                            current_last_messages.get(channel_username, 0)
+                            current_last_messages.get(channel_username, 0),
+                            current_last_messages.get(str(entity.id), 0)
                         )
                         
                         # اگر پیام قبلاً پردازش شده، از پردازش مجدد جلوگیری می‌کنیم
@@ -324,26 +330,42 @@ async def check_new_messages(client):
                             print(f"⏭️ پیام {message.id} از {channel_key} قبلاً پردازش شده است (آخرین: {current_last_seen_id})")
                             continue
                         
+                        # بررسی اینکه آیا این پیام در حال پردازش است
+                        message_key = f"{channel_key}:{message.id}"
+                        if message_key in processing_messages:
+                            print(f"⏭️ پیام {message.id} از {channel_key} در حال پردازش است")
+                            continue
+                        
+                        # اضافه کردن به لیست پیام‌های در حال پردازش
+                        processing_messages.add(message_key)
+                        
                         # به‌روزرسانی فوری قبل از ارسال برای جلوگیری از race condition
                         current_last_messages[channel_key] = message.id
-                        # همچنین با channel_username هم ذخیره می‌کنیم برای backward compatibility
-                        if channel_username != channel_key:
+                        # همچنین با همه کلیدهای ممکن ذخیره می‌کنیم برای اطمینان
+                        if str(entity.id) != channel_key:
+                            current_last_messages[str(entity.id)] = message.id
+                        if channel_username != channel_key and channel_username:
                             current_last_messages[channel_username] = message.id
                         save_last_messages(current_last_messages)
                     
                     # استخراج username کانال از entity
                     old_username = getattr(entity, 'username', None)
-                    success = await forward_message(
-                        client,
-                        message,
-                        TARGET_CHANNEL,
-                        old_username,
-                        NEW_USERNAME
-                    )
-                    
-                    # اگر پیام با موفقیت ارسال شد، آن را به لیست اضافه می‌کنیم
-                    if success:
-                        sent_messages.append(message)
+                    message_key = f"{channel_key}:{message.id}"
+                    try:
+                        success = await forward_message(
+                            client,
+                            message,
+                            TARGET_CHANNEL,
+                            old_username,
+                            NEW_USERNAME
+                        )
+                        
+                        # اگر پیام با موفقیت ارسال شد، آن را به لیست اضافه می‌کنیم
+                        if success:
+                            sent_messages.append(message)
+                    finally:
+                        # حذف از لیست پیام‌های در حال پردازش
+                        processing_messages.discard(message_key)
                     
                     await asyncio.sleep(2)  # تاخیر بین ارسال پیام‌ها
                 
@@ -478,42 +500,60 @@ async def main():
             # استخراج username کانال
             entity = await event.get_chat()
             entity_username = getattr(entity, 'username', None)
+            # استفاده از entity.id برای consistency با periodic check
             channel_key = entity_username or str(event.chat_id)
             
             # استفاده از lock برای جلوگیری از پردازش همزمان
             async with message_processing_lock:
                 # بررسی اینکه آیا این پیام قبلاً پردازش شده است
-                # بررسی با هر دو کلید ممکن برای consistency
+                # بررسی با همه کلیدهای ممکن برای اطمینان کامل
                 last_messages = load_last_messages()
-                last_seen_id = max(
-                    last_messages.get(channel_key, 0),
-                    last_messages.get(str(event.chat_id), 0)
-                )
+                # بررسی با همه کلیدهای ممکن
+                check_keys = [channel_key, str(event.chat_id)]
+                if hasattr(entity, 'id'):
+                    check_keys.append(str(entity.id))
+                
+                last_seen_id = max([last_messages.get(key, 0) for key in check_keys], default=0)
+                
+                # بررسی اینکه آیا این پیام در حال پردازش است
+                message_key = f"{channel_key}:{message.id}"
+                if message_key in processing_messages:
+                    print(f"⏭️ پیام {message.id} از {channel_key} در حال پردازش است")
+                    return
                 
                 # اگر پیام قبلاً پردازش شده، از پردازش مجدد جلوگیری می‌کنیم
                 if message.id <= last_seen_id:
                     print(f"⏭️ پیام {message.id} از {channel_key} قبلاً پردازش شده است (آخرین: {last_seen_id})")
                     return
                 
+                # اضافه کردن به لیست پیام‌های در حال پردازش
+                processing_messages.add(message_key)
+                
                 # به‌روزرسانی فوری قبل از ارسال برای جلوگیری از race condition
                 last_messages[channel_key] = message.id
-                # همچنین با chat_id هم ذخیره می‌کنیم برای backward compatibility
-                if str(event.chat_id) != channel_key:
-                    last_messages[str(event.chat_id)] = message.id
+                # همچنین با همه کلیدهای ممکن ذخیره می‌کنیم برای اطمینان
+                for key in check_keys:
+                    if key != channel_key:
+                        last_messages[key] = message.id
                 save_last_messages(last_messages)
             
             print(f"📨 پیام جدید دریافت شد از {event.chat_id}")
             
             old_username = getattr(entity, 'username', None)
             
-            # ارسال پیام (حتی اگر old_username None باشد، forward_message آن را مدیریت می‌کند)
-            await forward_message(
-                client,
-                message,
-                TARGET_CHANNEL,
-                old_username,
-                NEW_USERNAME
-            )
+            try:
+                # ارسال پیام (حتی اگر old_username None باشد، forward_message آن را مدیریت می‌کند)
+                await forward_message(
+                    client,
+                    message,
+                    TARGET_CHANNEL,
+                    old_username,
+                    NEW_USERNAME
+                )
+            finally:
+                # حذف از لیست پیام‌های در حال پردازش
+                message_key = f"{channel_key}:{message.id}"
+                processing_messages.discard(message_key)
         
         print("✅ ربات آماده است و در حال گوش دادن به پیام‌های جدید...")
         print("📌 کانال‌های منبع:", ', '.join(SOURCE_CHANNELS))
