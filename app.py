@@ -354,7 +354,14 @@ async def check_new_messages(client):
                 
                 # ارسال پیام‌های جدید
                 for message in new_messages:
-                    # استفاده از lock برای جلوگیری از پردازش همزمان
+                    # استخراج username کانال از entity
+                    old_username = getattr(entity, 'username', None)
+                    # استفاده از entity.id برای message_key برای سازگاری بین event handler و periodic check
+                    # entity.id همیشه برای کانال‌ها موجود است
+                    chat_id = entity.id if hasattr(entity, 'id') else str(channel_username)
+                    message_key = f"{chat_id}:{message.id}"
+                    
+                    # استفاده از lock برای جلوگیری از پردازش همزمان - نگه داشتن lock تا پایان ارسال
                     async with message_processing_lock:
                         # بررسی مجدد برای جلوگیری از پردازش تکراری (در صورت پردازش همزمان توسط event handler)
                         current_last_messages = load_last_messages()
@@ -367,7 +374,6 @@ async def check_new_messages(client):
                             continue
                         
                         # بررسی اینکه آیا این پیام در حال پردازش است
-                        message_key = f"{channel_key}:{message.id}"
                         if message_key in processing_messages:
                             print(f"⏭️ پیام {message.id} از {channel_key} در حال پردازش است")
                             continue
@@ -381,9 +387,7 @@ async def check_new_messages(client):
                             current_last_messages[key] = message.id
                         save_last_messages(current_last_messages)
                     
-                    # استخراج username کانال از entity
-                    old_username = getattr(entity, 'username', None)
-                    message_key = f"{channel_key}:{message.id}"
+                    # ارسال پیام خارج از lock برای جلوگیری از blocking طولانی
                     try:
                         success = await forward_message(
                             client,
@@ -398,7 +402,8 @@ async def check_new_messages(client):
                             sent_messages.append(message)
                     finally:
                         # حذف از لیست پیام‌های در حال پردازش
-                        processing_messages.discard(message_key)
+                        async with message_processing_lock:
+                            processing_messages.discard(message_key)
                     
                     await asyncio.sleep(2)  # تاخیر بین ارسال پیام‌ها
                 
@@ -541,6 +546,10 @@ async def main():
             # دریافت همه کلیدهای ممکن برای این کانال
             all_keys = get_all_channel_keys(entity, chat_id=event.chat_id)
             
+            old_username = getattr(entity, 'username', None)
+            # استفاده از event.chat_id برای message_key برای سازگاری بین event handler و periodic check
+            message_key = f"{event.chat_id}:{message.id}"
+            
             # استفاده از lock برای جلوگیری از پردازش همزمان
             async with message_processing_lock:
                 # بررسی اینکه آیا این پیام قبلاً پردازش شده است
@@ -549,7 +558,6 @@ async def main():
                 last_seen_id = max([last_messages.get(key, 0) for key in all_keys], default=0)
                 
                 # بررسی اینکه آیا این پیام در حال پردازش است
-                message_key = f"{channel_key}:{message.id}"
                 if message_key in processing_messages:
                     print(f"⏭️ پیام {message.id} از {channel_key} در حال پردازش است")
                     return
@@ -570,8 +578,6 @@ async def main():
             
             print(f"📨 پیام جدید دریافت شد از {event.chat_id}")
             
-            old_username = getattr(entity, 'username', None)
-            
             try:
                 # ارسال پیام (حتی اگر old_username None باشد، forward_message آن را مدیریت می‌کند)
                 await forward_message(
@@ -583,8 +589,8 @@ async def main():
                 )
             finally:
                 # حذف از لیست پیام‌های در حال پردازش
-                message_key = f"{channel_key}:{message.id}"
-                processing_messages.discard(message_key)
+                async with message_processing_lock:
+                    processing_messages.discard(message_key)
         
         print("✅ ربات آماده است و در حال گوش دادن به پیام‌های جدید...")
         print("📌 کانال‌های منبع:", ', '.join(SOURCE_CHANNELS))
