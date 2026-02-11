@@ -357,8 +357,12 @@ async def check_new_messages(client):
                     # استخراج username کانال از entity
                     old_username = getattr(entity, 'username', None)
                     # استفاده از entity.id برای message_key برای سازگاری بین event handler و periodic check
-                    # entity.id همیشه برای کانال‌ها موجود است
-                    chat_id = entity.id if hasattr(entity, 'id') else str(channel_username)
+                    # entity.id همیشه برای کانال‌ها موجود است و باید با event.chat_id یکسان باشد
+                    if not hasattr(entity, 'id') or entity.id is None:
+                        print(f"❌ خطا: entity.id برای {channel_username} موجود نیست")
+                        continue
+                    chat_id = entity.id
+                    # استفاده از chat_id برای message_key که باید با event.chat_id در event handler یکسان باشد
                     message_key = f"{chat_id}:{message.id}"
                     
                     # استفاده از lock برای جلوگیری از پردازش همزمان - نگه داشتن lock تا پایان ارسال
@@ -548,6 +552,10 @@ async def main():
             
             old_username = getattr(entity, 'username', None)
             # استفاده از event.chat_id برای message_key برای سازگاری بین event handler و periodic check
+            # بررسی اینکه entity.id و event.chat_id یکسان هستند
+            if hasattr(entity, 'id') and entity.id != event.chat_id:
+                print(f"⚠️ هشدار: entity.id ({entity.id}) و event.chat_id ({event.chat_id}) متفاوت هستند!")
+            # استفاده از event.chat_id برای سازگاری کامل
             message_key = f"{event.chat_id}:{message.id}"
             
             # استفاده از lock برای جلوگیری از پردازش همزمان
